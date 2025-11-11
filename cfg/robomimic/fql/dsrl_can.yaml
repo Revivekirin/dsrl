@@ -11,7 +11,7 @@ offline_data_path: ./dppo/log/robomimic/can_test/train_offline.npz
 dppo_path: ./dppo
 normalization_path: ./dppo/log/robomimic/${env_name}/normalization.npz
 
-algorithm: dsrl_na # options are: dsrl_na, dsrl_sac
+algorithm: latent_fql # options are: dsrl_na, dsrl_sac
 
 seed: 1
 device: cuda:0
@@ -77,6 +77,8 @@ train:
   action_magnitude: 1.5 # Maximum action magnitude in noise action space
   n_critics: 2 # Number of critic Q networks
   critic_backup_combine_type: min
+  z_dim: 28 # Latent dimension for flow policy #TODO: tune
+  alpha: 0.1 # Weighting factor for flow policy loss #TODO: tune
 
 model:
   _target_: model.diffusion.diffusion_eval.DiffusionEval

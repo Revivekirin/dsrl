@@ -11,9 +11,10 @@ from omegaconf import OmegaConf
 import gym, d4rl
 import d4rl.gym_mujoco
 import sys
+import torch as th
 sys.path.append('./dppo')
  
-from stable_baselines3 import SAC, DSRL
+from stable_baselines3 import SAC, FQL
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
@@ -26,7 +27,49 @@ OmegaConf.register_new_resolver("round_down", math.floor)
 
 base_path = os.path.dirname(os.path.abspath(__file__))
 
-	
+
+def _policy_device(policy):
+    return next(policy.flow_net.parameters()).device
+
+def debug_policy_forward(policy, obs_dim=23, z_dim=28):
+    dev = _policy_device(policy)
+    with th.no_grad():
+        obs = th.randn(4, obs_dim, device=dev)
+        z   = th.randn(4, z_dim, device=dev)
+        zp  = policy.flow_forward(obs, z)
+        q   = policy.q_forward(obs, zp)
+
+    print("[Policy Debug]")
+    print("input z mean/std:", z.mean().item(), z.std().item())
+    print("output z' mean/std:", zp.mean().item(), zp.std().item())
+    print("Δz norm:", (zp - z).norm(dim=-1).mean().item())
+    print("Q(s,z') mean/std:", q.mean().item(), q.std().item())
+
+def debug_decoder_output(fql_model, base_policy, obs_dim=23, z_dim=28, act_steps=4, act_dim=7):
+    # base_policy가 어떤 device에 있는지도 맞추기
+    dev = next(base_policy.base_policy.parameters()).device \
+          if hasattr(base_policy, "base_policy") else (
+          next(base_policy.parameters()).device if hasattr(base_policy, "parameters") else th.device("cpu")
+    )
+    # 또는 fql_model 정책 디바이스 재사용
+    dev = next(fql_model.policy.flow_net.parameters()).device
+
+    with th.no_grad():
+        obs = th.randn(2, obs_dim, device=dev)
+        z   = th.randn(2, z_dim, device=dev)
+        z_steered = fql_model.policy.flow_forward(obs, z)
+        act = base_policy(
+            obs,
+            z_steered.view(2, 1, -1),
+            return_numpy=False,
+        )
+    print("[Decoder Debug]")
+    print("Action shape:", tuple(act.shape))
+    print("Action mean/std:", act.mean().item(), act.std().item())
+
+
+
+		
 @hydra.main(
 	config_path=os.path.join(base_path, "cfg/robomimic"), config_name="dsrl_can.yaml", version_base=None
 )
@@ -76,12 +119,13 @@ def main(cfg: OmegaConf):
 	net_arch = []
 	for _ in range(cfg.train.num_layers):
 		net_arch.append(cfg.train.layer_size)
+		
 	policy_kwargs = dict(
 		net_arch=dict(pi=net_arch, qf=net_arch),
 		activation_fn=torch.nn.Tanh,
-		log_std_init=0.0,
+		z_dim=cfg.train.z_dim,
+		alpha=cfg.train.alpha,
 		post_linear_modules=post_linear_modules,
-		n_critics=cfg.train.n_critics,
 	)
 	if cfg.algorithm == 'dsrl_sac':
 		model = SAC(
@@ -106,9 +150,9 @@ def main(cfg: OmegaConf):
 			verbose=1,
 			policy_kwargs=policy_kwargs,
 		)
-	elif cfg.algorithm == 'dsrl_na':
-		model = DSRL(
-			"MlpPolicy",
+	elif cfg.algorithm == 'latent_fql':
+		model = FQL(
+			"LatentFQLPolicy",
 			env,
 			learning_rate=cfg.train.actor_lr,
 			buffer_size=10000000,      # Replay buffer size
@@ -120,19 +164,15 @@ def main(cfg: OmegaConf):
 			gradient_steps=cfg.train.utd,         # How many gradient steps to do at each update
 			action_noise=None,        # No additional action noise
 			optimize_memory_usage=False,
-			ent_coef="auto" if cfg.train.ent_coef == -1 else cfg.train.ent_coef,          # Automatic entropy tuning
 			target_update_interval=1, # Update target network every interval
-			target_entropy="auto" if cfg.train.target_ent == -1 else cfg.train.target_ent,    # Automatic target entropy
-			use_sde=False,
-			sde_sample_freq=-1,
 			tensorboard_log=cfg.logdir,
 			verbose=1,
 			policy_kwargs=policy_kwargs,
 			diffusion_policy=base_policy,
 			diffusion_act_dim=(cfg.act_steps, cfg.action_dim),
-			noise_critic_grad_steps=cfg.train.noise_critic_grad_steps,
-			critic_backup_combine_type=cfg.train.critic_backup_combine_type,
-		)
+			use_sde=False,
+			sde_sample_freq=-1,
+        )
 
 	checkpoint_callback = CheckpointCallback(
 		save_freq=cfg.save_model_interval, 
@@ -176,11 +216,14 @@ def main(cfg: OmegaConf):
 		logging_callback.set_timesteps(cfg.train.init_rollout_steps * num_env)
 
 	callbacks = [checkpoint_callback, logging_callback]
+	debug_policy_forward(model.policy, obs_dim=env.observation_space.shape[0], z_dim=cfg.train.z_dim)
+	debug_decoder_output(model, base_policy, obs_dim=env.observation_space.shape[0], z_dim=cfg.train.z_dim, act_steps=cfg.act_steps, act_dim=env.action_space.shape[0])
 	# Train the agent
 	model.learn(
 		total_timesteps=20000000,
 		callback = callbacks
 	)
+	debug_policy_forward(model.policy, obs_dim=env.observation_space.shape[0], z_dim=cfg.train.z_dim)
 
 	# Save the final model
 	if len(cfg.name) > 0:
