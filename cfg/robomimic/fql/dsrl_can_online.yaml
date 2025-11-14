@@ -83,8 +83,8 @@ train:
   #TODO: FQL specific parameters should be tested and tuned
   utd: 20 # Number of gradient steps to take per update
   # offline_steps: 100000  # 충분한 exploration 후 학습 시작
-  offline_steps: 100000  # 충분한 exploration 후 학습 시작
-  online_steps: 1000000
+  offline_steps: 0  # 충분한 exploration 후 학습 시작
+  online_steps: 2000000
   train_freq: 4  # 매 4 step마다 학습
   flow_steps: 1
   flow_step_size: 1.0

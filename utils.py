@@ -197,21 +197,125 @@ def collect_rollouts(model, env, num_steps, base_policy, cfg):
 	
 
 
-def load_offline_data(model, offline_data_path, n_env):
-	# this function should only be applied with dsrl_na
-	offline_data = np.load(offline_data_path)
-	obs = offline_data['states']
-	next_obs = offline_data['states_next']
-	actions = offline_data['actions']
-	rewards = offline_data['rewards']
-	terminals = offline_data['terminals']
-	for i in range(int(obs.shape[0]/n_env)):
-		model.replay_buffer.add(
-					obs=obs[n_env*i:n_env*i+n_env],
-					next_obs=next_obs[n_env*i:n_env*i+n_env],
-					action=actions[n_env*i:n_env*i+n_env],
-					reward=rewards[n_env*i:n_env*i+n_env],
-					done=terminals[n_env*i:n_env*i+n_env],
-					infos=[{}] * n_env,
-				)
-	model.replay_buffer.final_offline_step()
+# def load_offline_data(model, offline_data_path, n_env):
+# 	# this function should only be applied with dsrl_na
+# 	offline_data = np.load(offline_data_path)
+# 	obs = offline_data['states']
+# 	next_obs = offline_data['states_next']
+# 	actions = offline_data['actions']
+# 	rewards = offline_data['rewards']
+# 	terminals = offline_data['terminals']
+
+# 	for i in range(int(obs.shape[0]/n_env)):
+# 		model.replay_buffer.add(
+# 					obs=obs[n_env*i:n_env*i+n_env],
+# 					next_obs=next_obs[n_env*i:n_env*i+n_env],
+# 					action=actions[n_env*i:n_env*i+n_env],
+# 					reward=rewards[n_env*i:n_env*i+n_env],
+# 					done=terminals[n_env*i:n_env*i+n_env],
+# 					infos=[{}] * n_env,
+# 				)
+# 	model.replay_buffer.final_offline_step()
+
+
+def load_offline_data(model, offline_data_path, n_env: int):
+    offline_data = np.load(offline_data_path)
+
+    obs      = offline_data["states"].astype(np.float32)
+    next_obs = offline_data["states_next"].astype(np.float32)
+    actions  = offline_data["actions"].astype(np.float32)
+    rewards  = offline_data["rewards"]
+    terminals = offline_data["terminals"]
+
+    if rewards.ndim == 2 and rewards.shape[1] == 1:
+        rewards = rewards.squeeze(-1)
+    if terminals.ndim == 2 and terminals.shape[1] == 1:
+        terminals = terminals.squeeze(-1)
+
+    rewards   = rewards.astype(np.float32)
+    terminals = terminals.astype(np.float32)
+
+    N = obs.shape[0]
+
+    act_steps = getattr(model, "diffusion_act_chunk", None)
+    if act_steps is None:
+        raise ValueError("model.diffusion_act_chunk is missing")
+
+    primitive_act_dim = actions.shape[1]
+    env_action_dim    = model.replay_buffer.action_dim
+
+    if env_action_dim != act_steps * primitive_act_dim:
+        raise ValueError("env_action_dim mismatch")
+
+    done_mask = terminals > 0.5
+    done_indices = np.where(done_mask)[0]
+
+    episode_ranges = []
+    start = 0
+    for idx in done_indices:
+        episode_ranges.append((start, idx))
+        start = idx + 1
+    if start < N:
+        episode_ranges.append((start, N - 1))
+
+    chunk_states      = []
+    chunk_states_next = []
+    chunk_actions     = []
+    chunk_rewards     = []
+    chunk_dones       = []
+
+    for (ep_start, ep_end) in episode_ranges:
+        ep_len = ep_end - ep_start + 1
+        if ep_len < act_steps:
+            continue
+
+        last_start = ep_end - act_steps + 1
+
+        for t in range(ep_start, last_start + 1):
+            s_t = obs[t]
+            a_chunk = actions[t:t+act_steps].reshape(-1)
+            r_chunk = rewards[t:t+act_steps].sum()
+            idx_next = t + act_steps - 1
+            s_next_chunk = next_obs[idx_next]
+            d_chunk = float(np.max(terminals[t:t+act_steps]))
+
+            chunk_states.append(s_t)
+            chunk_states_next.append(s_next_chunk)
+            chunk_actions.append(a_chunk)
+            chunk_rewards.append(r_chunk)
+            chunk_dones.append(d_chunk)
+
+    chunk_states      = np.asarray(chunk_states, dtype=np.float32)
+    chunk_states_next = np.asarray(chunk_states_next, dtype=np.float32)
+    chunk_actions     = np.asarray(chunk_actions, dtype=np.float32)
+    chunk_rewards     = np.asarray(chunk_rewards, dtype=np.float32)
+    chunk_dones       = np.asarray(chunk_dones, dtype=np.float32)
+
+    M = chunk_states.shape[0]
+    print(f"[load_offline_data] chunked transitions = {M}")
+
+    if M % n_env != 0:
+        new_M = (M // n_env) * n_env
+        print(f"[load_offline_data] drop last {M - new_M} items")
+        M = new_M
+        chunk_states      = chunk_states[:M]
+        chunk_states_next = chunk_states_next[:M]
+        chunk_actions     = chunk_actions[:M]
+        chunk_rewards     = chunk_rewards[:M]
+        chunk_dones       = chunk_dones[:M]
+
+    num_batches = M // n_env
+    for i in range(num_batches):
+        start = i * n_env
+        end   = start + n_env
+        model.replay_buffer.add(
+            obs=chunk_states[start:end],
+            next_obs=chunk_states_next[start:end],
+            action=chunk_actions[start:end],
+            reward=chunk_rewards[start:end],
+            done=chunk_dones[start:end],
+            infos=[{}] * n_env,
+        )
+
+    if hasattr(model.replay_buffer, "final_offline_step"):
+        model.replay_buffer.final_offline_step()

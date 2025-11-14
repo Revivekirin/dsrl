@@ -235,7 +235,7 @@ def main(cfg: OmegaConf):
 	debug_decoder_output(model, base_policy, obs_dim=env.observation_space.shape[0], z_dim=cfg.train.z_dim, act_steps=cfg.act_steps, act_dim=env.action_space.shape[0])
 	# Train the agent
 	model.learn(
-		total_timesteps=20000000,
+		total_timesteps=1000000,
 		callback = callbacks
 	)
 	debug_policy_forward(model.policy, obs_dim=env.observation_space.shape[0], z_dim=cfg.train.z_dim)
