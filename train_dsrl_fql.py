@@ -119,14 +119,29 @@ def main(cfg: OmegaConf):
 	net_arch = []
 	for _ in range(cfg.train.num_layers):
 		net_arch.append(cfg.train.layer_size)
-		
+	
+	"""
+	Define policy_kwargs and flow matching parameters
+	    utd : Number of gradient steps to take per update
+		train_freq : update frequenc per steps
+		flow_steps : Number of flow matching steps
+		flow_step_size : Step size for flow matching
+		offline_steps : Number of offline pretraining steps of flow matching
+		online_steps : Number of online training steps
+
+	"""
 	policy_kwargs = dict(
 		net_arch=dict(pi=net_arch, qf=net_arch),
 		activation_fn=torch.nn.Tanh,
 		z_dim=cfg.train.z_dim,
 		alpha=cfg.train.alpha,
 		post_linear_modules=post_linear_modules,
+		flow_steps= cfg.train.flow_steps,
+		flow_step_size= cfg.train.flow_step_size,
+		offline_steps= cfg.train.offline_steps,
+		online_steps = cfg.train.online_steps,
 	)
+
 	if cfg.algorithm == 'dsrl_sac':
 		model = SAC(
 			"MlpPolicy",
@@ -155,7 +170,7 @@ def main(cfg: OmegaConf):
 			"LatentFQLPolicy",
 			env,
 			learning_rate=cfg.train.actor_lr,
-			buffer_size=10000000,      # Replay buffer size
+			buffer_size=20000000,      # Replay buffer size
 			learning_starts=1,    # How many steps before learning starts (total steps for all env combined)
 			batch_size=cfg.train.batch_size,
 			tau=cfg.train.tau,                # Target network update rate

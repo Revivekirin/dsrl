@@ -162,107 +162,38 @@ class LoggingCallback(BaseCallback):
 	def set_timesteps(self, timesteps):
 		self.total_timesteps = timesteps
 
-def _ensure_info_container(info, n):
-    """VecEnv에서 info가 dict/None/list인지와 무관하게 리스트[dict]로 변환"""
-    if isinstance(info, list):
-        out = []
-        for i in range(n):
-            d = info[i] if (i < len(info) and isinstance(info[i], dict)) else {}
-            out.append(d)
-        return out
-    # dict 또는 None이면 모든 env에 동일 사본을 붙인다
-    base = info if isinstance(info, dict) else {}
-    return [dict(base) for _ in range(n)]
 
 
-# TODO : 밑의 코드와 비교 수정
 def collect_rollouts(model, env, num_steps, base_policy, cfg):
-    obs = env.reset()
-    n_envs = cfg.env.n_envs
-    Ta, Da = cfg.act_steps, cfg.action_dim
-
-    for _ in range(num_steps):
-        # -------- 행동 생성 --------
-        if cfg.algorithm == 'latent_fql':
-            # FQL 모델에서 직접 (action_flat, zprime) 생성
-            obs_t = torch.tensor(obs, device=cfg.device, dtype=torch.float32)
-            action_flat, zprime = model._act_from_latent(obs_t)         # (N, Ta*Da), (N, Dz)
-            action = action_flat.reshape(n_envs, Ta, Da)                 # env 입력용
-        else:
-            # 기존 DSRL/DSRL-SAC 경로
-            noise = torch.randn(n_envs, Ta, Da, device=cfg.device)
-            if cfg.algorithm == 'dsrl_sac':
-                noise.clamp_(-cfg.train.action_magnitude, cfg.train.action_magnitude)
-            action = base_policy(torch.tensor(obs, device=cfg.device, dtype=torch.float32), noise)
-
-        # -------- 환경 step --------
-        next_obs, reward, done, info = env.step(action)
-
-        # -------- 버퍼 저장용 가공 --------
-        if cfg.algorithm == 'latent_fql':
-            action_store = action.reshape(n_envs, -1)  # (N, Ta*Da)
-            # info를 리스트[dict]로 표준화하고 z′를 주입
-            info_list = _ensure_info_container(info, n_envs)
-            z_np = zprime.detach().cpu().numpy()
-            for i in range(n_envs):
-                info_list[i]["latent"] = z_np[i]
-            info = info_list
-        elif cfg.algorithm == 'dsrl_sac':
-            action_store = model.policy.scale_action(
-                action.detach().cpu().numpy().reshape(n_envs, -1)
-            )
-        else:  # dsrl_na
-            action_store = action.reshape(n_envs, -1)
-
-        model.replay_buffer.add(
-            obs=obs,
-            next_obs=next_obs,
-            action=action_store,
-            reward=reward,
-            done=done,
-            infos=info,
-        )
-        obs = next_obs
-
-    model.replay_buffer.final_offline_step()
-
-
-# def collect_rollouts(model, env, num_steps, base_policy, cfg):
-# 	obs = env.reset()
-# 	for i in range(num_steps):
-# 		noise = torch.randn(cfg.env.n_envs, cfg.act_steps, cfg.action_dim).to(device=cfg.device)
-# 		if cfg.algorithm == 'dsrl_sac':
-# 			noise[noise < -cfg.train.action_magnitude] = -cfg.train.action_magnitude
-# 			noise[noise > cfg.train.action_magnitude] = cfg.train.action_magnitude
-# 		action = base_policy(torch.tensor(obs, device=cfg.device, dtype=torch.float32), noise)
-# 		next_obs, reward, done, info = env.step(action)
+	obs = env.reset()
+	for i in range(num_steps):
+		noise = torch.randn(cfg.env.n_envs, cfg.act_steps, cfg.action_dim).to(device=cfg.device)
+		if cfg.algorithm == 'dsrl_sac':
+			noise[noise < -cfg.train.action_magnitude] = -cfg.train.action_magnitude
+			noise[noise > cfg.train.action_magnitude] = cfg.train.action_magnitude
+		action = base_policy(torch.tensor(obs, device=cfg.device, dtype=torch.float32), noise)
+		next_obs, reward, done, info = env.step(action)
+		if cfg.algorithm == 'dsrl_na':
+			action_store = action
+		elif cfg.algorithm == 'dsrl_sac':
+			action_store = noise.detach().cpu().numpy()
+		elif cfg.algorithm == 'latent_fql':
+			action_store = action
+		action_store = action_store.reshape(-1, action_store.shape[1] * action_store.shape[2])
 		
-# 		# Store _last_latent in replay buffer for latent_fql
-# 		info = info or {}
-# 		if cfg.algorithm == 'latent_fql':
-# 			print("[DEBUG] last latent ", model._last_latent)
-# 			info["latent"] = model._last_latent.detach().cpu().numpy() 
-
-# 		if cfg.algorithm == 'dsrl_na':
-# 			action_store = action
-# 		elif cfg.algorithm == 'dsrl_sac':
-# 			action_store = noise.detach().cpu().numpy()
-# 		elif cfg.algorithm == 'latent_fql':
-# 			action_store = action
-
-# 		action_store = action_store.reshape(-1, action_store.shape[1] * action_store.shape[2])
-# 		if cfg.algorithm == 'dsrl_sac':
-# 			action_store = model.policy.scale_action(action_store)
-# 		model.replay_buffer.add(
-# 				obs=obs,
-# 				next_obs=next_obs,
-# 				action=action_store,
-# 				reward=reward,
-# 				done=done,
-# 				infos=info,
-# 			)
-# 		obs = next_obs
-# 	model.replay_buffer.final_offline_step()
+		if cfg.algorithm == 'dsrl_sac':
+			action_store = model.policy.scale_action(action_store)
+		
+		model.replay_buffer.add(
+				obs=obs,
+				next_obs=next_obs,
+				action=action_store,
+				reward=reward,
+				done=done,
+				infos=info,
+			)
+		obs = next_obs
+	model.replay_buffer.final_offline_step()
 	
 
 

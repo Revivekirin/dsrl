@@ -4,5 +4,3 @@
 [submodule "dppo"]
 	path = dppo
 	url = https://github.com/Revivekirin/dppo.git
-[submodule]
-	dppo = https://github.com/Revivekirin/dppo.git
