@@ -22,13 +22,13 @@ obs_dim: 23
 action_dim: 7
 cond_steps: 1
 act_steps: 4 # action chunk size of base policy
-load_offline_data: True # if true, load offline demonstration data into replay buffer
+load_offline_data: False # if true, load offline demonstration data into replay buffer
 deterministic_eval: False # if true, run eval with both deterministic actions, as well as stochastic
 
 eval_interval: 3000
 num_evals: 200
 save_model_interval: 10000
-save_replay_buffer: True
+save_replay_buffer: False
 
 env:
   n_envs:  4

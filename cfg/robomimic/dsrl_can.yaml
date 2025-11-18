@@ -7,7 +7,7 @@ hydra:
 name: robomimic_can_dsrl_${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 logdir: ${log_dir}/robomimic-dsrl/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 base_policy_path: ./dppo/log/robomimic-pretrain/can/can_pre_diffusion_mlp_ta4_td20/2024-06-28_13-29-54/checkpoint/state_5000.pt
-offline_data_path: ./dppo/log/robomimic/can_test/train_offline.npz
+offline_data_path: ./dppo/log/robomimic/${env_name}/train_offline.npz
 dppo_path: ./dppo
 normalization_path: ./dppo/log/robomimic/${env_name}/normalization.npz
 
@@ -36,7 +36,7 @@ env:
   name: ${env_name}
   max_episode_steps: 300
   reset_at_iteration: False
-  save_video: False
+  save_video: True
   best_reward_threshold_for_success: 1 
   reward_offset: 1
   wrappers:
@@ -56,6 +56,9 @@ wandb:
   project: dsrl
   run: ${now:%H-%M-%S}_${name}
   group: robomimic-can
+  entity: sophia435256-robros        
+  mode: online 
+
 
 train:
   tau: 0.005 # Target update rate

@@ -14,7 +14,7 @@ import sys
 import torch as th
 sys.path.append('./dppo')
  
-from stable_baselines3 import SAC, FQL
+from stable_baselines3 import SAC, FQL, CKFQL
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
@@ -31,27 +31,43 @@ base_path = os.path.dirname(os.path.abspath(__file__))
 def _policy_device(policy):
     return next(policy.flow_net.parameters()).device
 
-def debug_policy_forward(policy, obs_dim=23, z_dim=28):
-    dev = _policy_device(policy)
-    with th.no_grad():
-        obs = th.randn(4, obs_dim, device=dev)
-        z   = th.randn(4, z_dim, device=dev)
-        zp  = policy.flow_forward(obs, z)
-        q   = policy.q_forward(obs, zp)
+
+def debug_policy_forward(policy, obs_dim: int, z_dim: int):
+
+    device = next(policy.parameters()).device
+    B = 4
+
+    obs = torch.randn(B, obs_dim, device=device)
+    z_full = torch.randn(B, z_dim, device=device)
+    z_full = policy.flow_forward(obs, z_full)
+
+    if hasattr(policy, "chunk_len") and hasattr(policy, "z_step_dim"):
+        T = policy.chunk_len
+        z_step_dim = policy.z_step_dim
+
+        z_chunk = z_full.view(B, T, z_step_dim)
+
+        z_step = z_chunk[:, 0, :]  # (B, z_step_dim)
+
+        q = policy.q_forward(obs, z_step) 
+    else:
+        q = policy.q_forward(obs, z_full)
 
     print("[Policy Debug]")
-    print("input z mean/std:", z.mean().item(), z.std().item())
-    print("output z' mean/std:", zp.mean().item(), zp.std().item())
-    print("Δz norm:", (zp - z).norm(dim=-1).mean().item())
-    print("Q(s,z') mean/std:", q.mean().item(), q.std().item())
+    print("obs shape:      ", obs.shape)
+    print("z_full shape:   ", z_full.shape)
+    if hasattr(policy, "chunk_len"):
+        print("chunk_len:      ", policy.chunk_len)
+        print("z_step_dim:     ", policy.z_step_dim)
+        print("z_step shape:   ", z_step.shape)
+    print("Q(s, z_step) :", q.mean().item(), "+/-", q.std().item())
+
 
 def debug_decoder_output(fql_model, base_policy, obs_dim=23, z_dim=28, act_steps=4, act_dim=7):
-    # base_policy가 어떤 device에 있는지도 맞추기
     dev = next(base_policy.base_policy.parameters()).device \
           if hasattr(base_policy, "base_policy") else (
           next(base_policy.parameters()).device if hasattr(base_policy, "parameters") else th.device("cpu")
     )
-    # 또는 fql_model 정책 디바이스 재사용
     dev = next(fql_model.policy.flow_net.parameters()).device
 
     with th.no_grad():
@@ -188,6 +204,29 @@ def main(cfg: OmegaConf):
 			use_sde=False,
 			sde_sample_freq=-1,
         )
+	elif cfg.algorithm == 'chunked_latent_fql':
+		model = CKFQL(
+			"CKLatentFQLPolicy",
+			env,
+			learning_rate=cfg.train.actor_lr,
+			buffer_size=20000000,      # Replay buffer size
+			learning_starts=1,    # How many steps before learning starts (total steps for all env combined)
+			batch_size=cfg.train.batch_size,
+			tau=cfg.train.tau,                # Target network update rate
+			gamma=cfg.train.discount,               # Discount factor
+			train_freq=cfg.train.train_freq,             # Update the model every train_freq steps
+			gradient_steps=cfg.train.utd,         # How many gradient steps to do at each update
+			action_noise=None,        # No additional action noise
+			optimize_memory_usage=False,
+			target_update_interval=1, # Update target network every interval
+			tensorboard_log=cfg.logdir,
+			verbose=1,
+			policy_kwargs=policy_kwargs,
+			diffusion_policy=base_policy,
+			diffusion_act_dim=(cfg.act_steps, cfg.action_dim),
+			use_sde=False,
+			sde_sample_freq=-1,
+		)
 
 	checkpoint_callback = CheckpointCallback(
 		save_freq=cfg.save_model_interval, 

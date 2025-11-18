@@ -128,7 +128,8 @@ class LoggingCallback(BaseCallback):
 							action, _ = agent.predict_diffused(obs, deterministic=deterministic)
 						elif self.algorithm == 'latent_fql':
 							action, _ = agent.predict_diffused(obs, deterministic=deterministic)
-							pass
+						else:
+							action, _ = agent.predict_diffused(obs, deterministic=deterministic)
 						next_obs, reward, done, info = env.step(action)
 						obs = next_obs
 						rew_ep += reward
@@ -178,6 +179,8 @@ def collect_rollouts(model, env, num_steps, base_policy, cfg):
 		elif cfg.algorithm == 'dsrl_sac':
 			action_store = noise.detach().cpu().numpy()
 		elif cfg.algorithm == 'latent_fql':
+			action_store = action
+		else:
 			action_store = action
 		action_store = action_store.reshape(-1, action_store.shape[1] * action_store.shape[2])
 		
